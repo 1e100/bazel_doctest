@@ -10,5 +10,5 @@ py_library(
 
 py_doc_test(
     name = "subpackage_doctest",
-    deps = [":subpackage"]
+    srcs = [":subpackage"]
 )

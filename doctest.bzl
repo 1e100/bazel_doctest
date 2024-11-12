@@ -1,78 +1,74 @@
-""" Implements Python doctest support for Bazel. """
+# Adapted from https://github.com/1e100/bazel_doctest/tree/master
+"""Implements Python doctest support for Bazel."""
 
-load("@rules_python//python:defs.bzl", "PyInfo", "py_test")
+load("@rules_python//python:defs.bzl", "py_test")
 
-def _target_to_module(target):
-    """ Converts the label name to the Python module name. """
-    label = target.label
-    return ".".join([label.package.replace("/", "."), label.name])
-
-def _py_doctest_runner_impl(ctx):
-    """ Generates Python test file that pulls in doctests (if any) for all Python
-    libraries in deps, and then provides that file to py_test target. """
-    module_includes = []
-    if len(ctx.attr.deps) == 0:
-        fail("Attribute `deps` must contain one or more dependencies.")
-    for d in ctx.attr.deps:
-        include = "  tests.addTests(doctest.DocTestSuite('{}'))".format(_target_to_module(d))
-        module_includes.append(include)
-    module_lines = "\n".join(module_includes)
-    doctest_tpl = r"""#!/usr/bin/env python3
-import doctest
-import unittest
+DOCTEST_TPL = r"""
+import doctest, unittest
 
 
 def load_tests(loader, tests, ignore):
 {}
-  return tests
+    return tests
 
 
 if __name__ == "__main__":
-  unittest.main()"""
-    doctest_src = doctest_tpl.format(module_lines)
+    unittest.main()
+"""
+
+# TODO: Make `ELLIPSIS` optional?
+ADD_TESTS_TPL = r"    tests.addTests(doctest.DocTestSuite('{}', optionflags=doctest.ELLIPSIS))"
+
+def _file_to_module(file):
+    if file.basename == "__init__.py":
+        path = file.dirname
+    else:
+        path = file.path[:-len(file.extension) - 1]
+    return path.replace("/", ".")
+
+def _impl(ctx):
+    modules = []
+    for src in ctx.attr.srcs:
+        modules.extend([
+            ADD_TESTS_TPL.format(_file_to_module(file))
+            for file in src.files.to_list()
+        ])
     runner = ctx.actions.declare_file(ctx.attr.name)
+    content = DOCTEST_TPL.format("\n".join(modules))
     ctx.actions.write(
         runner,
-        content = doctest_src,
-        is_executable = True,
+        content = content,
     )
     return [
         DefaultInfo(files = depset([runner])),
     ]
 
-_doctest_script = rule(
-    implementation = _py_doctest_runner_impl,
+_runner = rule(
+    implementation = _impl,
     attrs = {
-        "deps": attr.label_list(
+        "srcs": attr.label_list(
             mandatory = True,
-            allow_empty = False,
-            providers = [PyInfo],
+            providers = [DefaultInfo],
             doc = "List of Python targets potentially containing doctests.",
         ),
     },
 )
 
-# Deliberately using the required _test convention so that this is easy to
-# search for.
-def py_doc_test(name, deps, args = None, **kwargs):
-    runner_target = "%s-doctest-runner.py" % name
-
-    # Generate the script which runs doctests.
-    _doctest_script(
-        name = runner_target,
-        deps = deps,
+# Deliberately using the required _test convention
+# so that this is easy to search for.
+def py_doc_test(name, srcs, deps = [], **kwargs):
+    runner_py = name + "-doctest-runner.py"
+    _runner(
+        name = runner_py,
+        srcs = srcs,
         testonly = True,
-        args = args,
     )
-
-    # Run the doctests.
     py_test(
         name = name,
-        srcs = [runner_target],
-        deps = deps,
-        main = runner_target,
+        srcs = [runner_py],
+        deps = srcs + deps,
+        main = runner_py,
         legacy_create_init = False,
-        imports = ["."],
         python_version = "PY3",
         **kwargs
     )
