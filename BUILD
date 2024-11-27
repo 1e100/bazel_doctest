@@ -23,7 +23,7 @@ py_test(
 
 py_doc_test(
     name = "module_doctest",
-    deps = [
+    srcs = [
         ":another_module",
         ":module",
         # This is allowed, but strongly discouraged. You should
